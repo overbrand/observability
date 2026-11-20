@@ -71,7 +71,7 @@ tells you — nothing inside a dead server can.
 **Logto sign-in** (optional): a "Traditional web" app in the Overbrand
 Logto, redirect URI `https://grafana.overbrand.net/login/generic_oauth`,
 then `LOGTO_ENABLED=true` with its endpoint, client id and secret. Logto
-role `grafana-admin` → Grafana Admin, `grafana-editor` → Editor, anyone
+role `grafanaAdmin` → Grafana Admin, `grafanaEditor` → Editor, anyone
 else Viewer. Keep the local admin as the way in when SSO is down.
 
 ## Connect a machine
