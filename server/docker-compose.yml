@@ -42,7 +42,8 @@ services:
       GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP: "true"
       # Logto role "grafana-admin" → Admin, "grafana-editor" → Editor, else Viewer.
       GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: "contains(roles[*], 'grafana-admin') && 'Admin' || contains(roles[*], 'grafana-editor') && 'Editor' || 'Viewer'"
-      GF_AUTH_SIGNOUT_REDIRECT_URL: ${LOGTO_ENDPOINT:-}/oidc/session/end
+      # Ends the Logto session too, then comes back to the Grafana login page.
+      GF_AUTH_SIGNOUT_REDIRECT_URL: ${LOGTO_ENDPOINT:-}/oidc/session/end?client_id=${LOGTO_CLIENT_ID:-}&post_logout_redirect_uri=https://${GRAFANA_DOMAIN}/login
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
