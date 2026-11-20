@@ -163,3 +163,10 @@ Notes:
   see the other containers (cgroup v2).
 - Alertmanager's config is generated at start by
   `server/alertmanager/render.sh`, so secrets stay in the environment.
+- The central services are built from `server/Dockerfile` (one stage per
+  service) with their configuration, dashboards, rules and uptime lists
+  inside the image. No bind mounts: Dokploy re-clones the repository on each
+  deploy, and a container that is not recreated would keep reading the
+  deleted copy. A change to any of those files ships with the next deploy.
+- Logto: the Grafana app requests `openid profile email roles`. Logto
+  refuses `offline_access` for it, and Grafana does not need refresh tokens.

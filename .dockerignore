@@ -1,0 +1,7 @@
+# Only server/, grafana/ and uptime/ are copied into the images; keep the
+# rest, and every local secret file, out of the build context.
+.git
+*.env
+!*.env.example
+agents
+scripts

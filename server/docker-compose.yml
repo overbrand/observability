@@ -8,6 +8,9 @@
 #                     behind basic auth: one INGEST_USERS entry per agent.
 # Prometheus, Loki, Alertmanager and the blackbox prober are not published.
 #
+# Each service is built from server/Dockerfile with its configuration inside
+# the image (no bind mounts): Dokploy re-clones the repository on every deploy.
+#
 # Service names carry an `obs-` prefix: dokploy-network is shared by every
 # app on the server, and a plain `prometheus` could resolve to someone else's.
 
@@ -19,7 +22,7 @@ x-logging: &logging
 
 services:
   obs-grafana:
-    image: grafana/grafana:11.3.1
+    build: { context: .., dockerfile: server/Dockerfile, target: grafana }
     restart: unless-stopped
     environment:
       GF_SERVER_ROOT_URL: https://${GRAFANA_DOMAIN:?Set GRAFANA_DOMAIN, e.g. grafana.overbrand.net}
@@ -34,7 +37,7 @@ services:
       GF_AUTH_GENERIC_OAUTH_NAME: Overbrand
       GF_AUTH_GENERIC_OAUTH_CLIENT_ID: ${LOGTO_CLIENT_ID:-}
       GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: ${LOGTO_CLIENT_SECRET:-}
-      GF_AUTH_GENERIC_OAUTH_SCOPES: openid profile email offline_access roles
+      GF_AUTH_GENERIC_OAUTH_SCOPES: openid profile email roles
       GF_AUTH_GENERIC_OAUTH_AUTH_URL: ${LOGTO_ENDPOINT:-}/oidc/auth
       GF_AUTH_GENERIC_OAUTH_TOKEN_URL: ${LOGTO_ENDPOINT:-}/oidc/token
       GF_AUTH_GENERIC_OAUTH_API_URL: ${LOGTO_ENDPOINT:-}/oidc/me
@@ -45,8 +48,6 @@ services:
       # Ends the Logto session too, then comes back to the Grafana login page.
       GF_AUTH_SIGNOUT_REDIRECT_URL: ${LOGTO_ENDPOINT:-}/oidc/session/end?client_id=${LOGTO_CLIENT_ID:-}&post_logout_redirect_uri=https://${GRAFANA_DOMAIN}/login
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     depends_on: [obs-prometheus, obs-loki, obs-alertmanager]
     networks: [obs, dokploy-network]
@@ -67,7 +68,7 @@ services:
     logging: *logging
 
   obs-prometheus:
-    image: prom/prometheus:v2.55.1
+    build: { context: .., dockerfile: server/Dockerfile, target: prometheus }
     restart: unless-stopped
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -78,9 +79,6 @@ services:
       - --web.enable-remote-write-receiver
       - --web.enable-lifecycle
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ../grafana/alerts/prometheus:/etc/prometheus/rules:ro
-      - ../uptime:/etc/prometheus/uptime:ro
       - prometheus_data:/prometheus
     networks: [obs, dokploy-network]
     labels:
@@ -100,15 +98,12 @@ services:
     logging: *logging
 
   obs-loki:
-    image: grafana/loki:3.3.2
+    build: { context: .., dockerfile: server/Dockerfile, target: loki }
     restart: unless-stopped
     command: ["-config.file=/etc/loki/loki.yml", "-config.expand-env=true"]
     environment:
       LOGS_RETENTION: ${LOGS_RETENTION:-336h}
     volumes:
-      - ./loki/loki.yml:/etc/loki/loki.yml:ro
-      # Single tenant ("fake" while auth is off): its rules live in that folder.
-      - ../grafana/alerts/loki:/etc/loki/rules/fake:ro
       - loki_data:/loki
     networks: [obs, dokploy-network]
     labels:
@@ -124,7 +119,7 @@ services:
     logging: *logging
 
   obs-alertmanager:
-    image: prom/alertmanager:v0.27.0
+    build: { context: .., dockerfile: server/Dockerfile, target: alertmanager }
     restart: unless-stopped
     # The config is rendered from the environment at start, so the bot token
     # and the SMTP password are never written in the repository.
@@ -146,19 +141,15 @@ services:
       TELEGRAM_CHAT_EVENTEZ: ${TELEGRAM_CHAT_EVENTEZ:-}
       EMAIL_EVENTEZ: ${EMAIL_EVENTEZ:-}
     volumes:
-      - ./alertmanager/render.sh:/etc/alertmanager/render.sh:ro
-      - ./alertmanager/templates:/etc/alertmanager/templates:ro
       - alertmanager_data:/alertmanager
     networks: [obs]
     labels: ["overbrand.project=overbrand"]
     logging: *logging
 
   obs-blackbox:
-    image: prom/blackbox-exporter:v0.25.0
+    build: { context: .., dockerfile: server/Dockerfile, target: blackbox }
     restart: unless-stopped
     command: ["--config.file=/etc/blackbox/blackbox.yml"]
-    volumes:
-      - ./blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
     networks: [obs]
     labels: ["overbrand.project=overbrand"]
     logging: *logging
