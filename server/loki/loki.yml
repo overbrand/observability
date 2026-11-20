@@ -1,0 +1,61 @@
+# Single-binary Loki on the local disk. One tenant: projects are told apart
+# by the `project` label, not by tenants.
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  log_format: json
+
+common:
+  path_prefix: /loki
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+
+schema_config:
+  configs:
+    - from: "2024-01-01"
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: ${LOGS_RETENTION}
+  # Labels are project/env/service/container (+ k8s namespace/pod): keep them few.
+  max_label_names_per_series: 15
+  ingestion_rate_mb: 8
+  ingestion_burst_size_mb: 16
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  allow_structured_metadata: true
+  volume_enabled: true
+  # The agents set `service` themselves; no extra `service_name` copy.
+  discover_service_name: []
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /etc/loki/rules
+  rule_path: /loki/rules-temp
+  alertmanager_url: http://obs-alertmanager:9093
+  enable_api: true
+  ring:
+    kvstore:
+      store: inmemory
+
+analytics:
+  reporting_enabled: false

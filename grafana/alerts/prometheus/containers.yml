@@ -1,0 +1,18 @@
+# Docker containers (alloy-docker, cAdvisor). Labels: project, env, host, service, container.
+groups:
+  - name: containers
+    rules:
+      - alert: ContainerRestarting
+        expr: changes(container_start_time_seconds{service!=""}[15m]) > 2
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }} restarted {{ $value }} times in 15 minutes on {{ $labels.host }}"
+
+      - alert: ContainerMemoryNearLimit
+        expr: |
+          container_memory_working_set_bytes{service!=""}
+            / (container_spec_memory_limit_bytes{service!=""} > 0) > 0.9
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }} uses {{ $value | humanizePercentage }} of its memory limit"

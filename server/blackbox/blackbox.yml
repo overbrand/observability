@@ -1,0 +1,22 @@
+modules:
+  # The page answers 2xx (redirects followed).
+  http_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: true
+      follow_redirects: true
+      valid_status_codes: []  # 2xx
+  # A health endpoint: 2xx and a body that says it is healthy. Matches BNS
+  # ({"status":"ok"} or "degraded") and Eventez ({"status":"healthy"}).
+  http_health:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: true
+      follow_redirects: false
+      valid_status_codes: []
+      fail_if_body_not_matches_regexp:
+        - '"status"\s*:\s*"(ok|healthy|degraded)"'

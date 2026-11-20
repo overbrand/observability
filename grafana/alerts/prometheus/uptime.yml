@@ -1,0 +1,33 @@
+# Uptime, from the probes in uptime/*.yml. Labels: project, env, service, instance (the URL).
+groups:
+  - name: uptime
+    rules:
+      - alert: EndpointDown
+        expr: probe_success{job="uptime"} == 0
+        for: 3m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.instance }} is not answering correctly"
+          description: "The {{ $labels.service }} probe ({{ $labels.module }}) has failed for 3 minutes."
+
+      - alert: EndpointSlow
+        expr: avg_over_time(probe_duration_seconds{job="uptime"}[10m]) > 5
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.instance }} takes {{ $value | humanizeDuration }} to answer"
+
+      - alert: CertificateExpiresSoon
+        expr: (probe_ssl_earliest_cert_expiry{job="uptime"} - time()) / 86400 < 14
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "TLS certificate of {{ $labels.instance }} expires in {{ $value | humanize }} days"
+          description: "Let's Encrypt renews at 30 days left: renewal is failing."
+
+      - alert: CertificateExpiresSoon
+        expr: (probe_ssl_earliest_cert_expiry{job="uptime"} - time()) / 86400 < 3
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "TLS certificate of {{ $labels.instance }} expires in {{ $value | humanize }} days"

@@ -1,0 +1,5 @@
+# Eventez.
+- targets: ["https://eventez.online/"]
+  labels: { project: eventez, env: production, service: web, module: http_2xx }
+- targets: ["https://eventez.online/api/health/"]
+  labels: { project: eventez, env: production, service: api, module: http_health }

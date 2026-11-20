@@ -1,0 +1,174 @@
+# Overbrand observability — the central stack. Deployed by Dokploy as a
+# "Docker Compose" app: repository overbrand/observability, compose path
+# server/docker-compose.yml, environment from server/.env.example.
+#
+# Public, through Dokploy's Traefik (TLS by Let's Encrypt):
+#   GRAFANA_DOMAIN  → Grafana (its own login, or Logto)
+#   INGEST_DOMAIN   → /api/v1/write (Prometheus) and /loki/api/v1/push (Loki),
+#                     behind basic auth: one INGEST_USERS entry per agent.
+# Prometheus, Loki, Alertmanager and the blackbox prober are not published.
+#
+# Service names carry an `obs-` prefix: dokploy-network is shared by every
+# app on the server, and a plain `prometheus` could resolve to someone else's.
+
+name: overbrand-observability
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "20m", max-file: "3" }
+
+services:
+  obs-grafana:
+    image: grafana/grafana:11.3.1
+    restart: unless-stopped
+    environment:
+      GF_SERVER_ROOT_URL: https://${GRAFANA_DOMAIN:?Set GRAFANA_DOMAIN, e.g. grafana.overbrand.net}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_LOG_MODE: console
+      GF_LOG_CONSOLE_FORMAT: json
+      # Sign in with the Overbrand Logto (optional; off until LOGTO_ENABLED=true).
+      GF_AUTH_GENERIC_OAUTH_ENABLED: ${LOGTO_ENABLED:-false}
+      GF_AUTH_GENERIC_OAUTH_NAME: Overbrand
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: ${LOGTO_CLIENT_ID:-}
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: ${LOGTO_CLIENT_SECRET:-}
+      GF_AUTH_GENERIC_OAUTH_SCOPES: openid profile email offline_access roles
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: ${LOGTO_ENDPOINT:-}/oidc/auth
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: ${LOGTO_ENDPOINT:-}/oidc/token
+      GF_AUTH_GENERIC_OAUTH_API_URL: ${LOGTO_ENDPOINT:-}/oidc/me
+      GF_AUTH_GENERIC_OAUTH_USE_PKCE: "true"
+      GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP: "true"
+      # Logto role "grafana-admin" → Admin, "grafana-editor" → Editor, else Viewer.
+      GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: "contains(roles[*], 'grafana-admin') && 'Admin' || contains(roles[*], 'grafana-editor') && 'Editor' || 'Viewer'"
+      GF_AUTH_SIGNOUT_REDIRECT_URL: ${LOGTO_ENDPOINT:-}/oidc/session/end
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on: [obs-prometheus, obs-loki, obs-alertmanager]
+    networks: [obs, dokploy-network]
+    labels:
+      - "overbrand.project=overbrand"
+      - "traefik.enable=true"
+      - "traefik.docker.network=dokploy-network"
+      - "traefik.http.routers.obs-grafana.rule=Host(`${GRAFANA_DOMAIN}`)"
+      - "traefik.http.routers.obs-grafana.entrypoints=websecure"
+      - "traefik.http.routers.obs-grafana.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.obs-grafana.service=obs-grafana"
+      - "traefik.http.routers.obs-grafana-http.rule=Host(`${GRAFANA_DOMAIN}`)"
+      - "traefik.http.routers.obs-grafana-http.entrypoints=web"
+      - "traefik.http.routers.obs-grafana-http.middlewares=obs-https"
+      - "traefik.http.middlewares.obs-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.obs-https.redirectscheme.permanent=true"
+      - "traefik.http.services.obs-grafana.loadbalancer.server.port=3000"
+    logging: *logging
+
+  obs-prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${METRICS_RETENTION:-30d}
+      - --storage.tsdb.retention.size=${METRICS_RETENTION_SIZE:-20GB}
+      # The agents push here, through Traefik's basic auth.
+      - --web.enable-remote-write-receiver
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../grafana/alerts/prometheus:/etc/prometheus/rules:ro
+      - ../uptime:/etc/prometheus/uptime:ro
+      - prometheus_data:/prometheus
+    networks: [obs, dokploy-network]
+    labels:
+      - "overbrand.project=overbrand"
+      - "traefik.enable=true"
+      - "traefik.docker.network=dokploy-network"
+      # Only the remote-write path is published, and only with a password.
+      - "traefik.http.routers.obs-metrics-in.rule=Host(`${INGEST_DOMAIN:?Set INGEST_DOMAIN, e.g. ingest.overbrand.net}`) && Path(`/api/v1/write`)"
+      - "traefik.http.routers.obs-metrics-in.entrypoints=websecure"
+      - "traefik.http.routers.obs-metrics-in.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.obs-metrics-in.middlewares=obs-ingest-auth"
+      - "traefik.http.routers.obs-metrics-in.service=obs-metrics-in"
+      - "traefik.http.services.obs-metrics-in.loadbalancer.server.port=9090"
+      # htpasswd (bcrypt) entries, comma-separated: scripts/ingest-user.sh NAME
+      - "traefik.http.middlewares.obs-ingest-auth.basicauth.users=${INGEST_USERS:?Set INGEST_USERS (scripts/ingest-user.sh)}"
+      - "traefik.http.middlewares.obs-ingest-auth.basicauth.removeheader=true"
+    logging: *logging
+
+  obs-loki:
+    image: grafana/loki:3.3.2
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki.yml", "-config.expand-env=true"]
+    environment:
+      LOGS_RETENTION: ${LOGS_RETENTION:-336h}
+    volumes:
+      - ./loki/loki.yml:/etc/loki/loki.yml:ro
+      # Single tenant ("fake" while auth is off): its rules live in that folder.
+      - ../grafana/alerts/loki:/etc/loki/rules/fake:ro
+      - loki_data:/loki
+    networks: [obs, dokploy-network]
+    labels:
+      - "overbrand.project=overbrand"
+      - "traefik.enable=true"
+      - "traefik.docker.network=dokploy-network"
+      - "traefik.http.routers.obs-logs-in.rule=Host(`${INGEST_DOMAIN}`) && Path(`/loki/api/v1/push`)"
+      - "traefik.http.routers.obs-logs-in.entrypoints=websecure"
+      - "traefik.http.routers.obs-logs-in.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.obs-logs-in.middlewares=obs-ingest-auth"
+      - "traefik.http.routers.obs-logs-in.service=obs-logs-in"
+      - "traefik.http.services.obs-logs-in.loadbalancer.server.port=3100"
+    logging: *logging
+
+  obs-alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    # The config is rendered from the environment at start, so the bot token
+    # and the SMTP password are never written in the repository.
+    entrypoint: ["/bin/sh", "/etc/alertmanager/render.sh"]
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_OPS: ${TELEGRAM_CHAT_OPS:?Set TELEGRAM_CHAT_OPS}
+      EMAIL_OPS: ${EMAIL_OPS:?Set EMAIL_OPS}
+      SMTP_SMARTHOST: ${SMTP_SMARTHOST:?Set SMTP_SMARTHOST, e.g. smtp.example.com:587}
+      SMTP_FROM: ${SMTP_FROM:?Set SMTP_FROM}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      HEARTBEAT_URL: ${HEARTBEAT_URL:-}
+      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN}
+      # One line per project: its chat and address (empty → the ops ones).
+      PROJECTS: bns eventez
+      TELEGRAM_CHAT_BNS: ${TELEGRAM_CHAT_BNS:-}
+      EMAIL_BNS: ${EMAIL_BNS:-}
+      TELEGRAM_CHAT_EVENTEZ: ${TELEGRAM_CHAT_EVENTEZ:-}
+      EMAIL_EVENTEZ: ${EMAIL_EVENTEZ:-}
+    volumes:
+      - ./alertmanager/render.sh:/etc/alertmanager/render.sh:ro
+      - ./alertmanager/templates:/etc/alertmanager/templates:ro
+      - alertmanager_data:/alertmanager
+    networks: [obs]
+    labels: ["overbrand.project=overbrand"]
+    logging: *logging
+
+  obs-blackbox:
+    image: prom/blackbox-exporter:v0.25.0
+    restart: unless-stopped
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    volumes:
+      - ./blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    networks: [obs]
+    labels: ["overbrand.project=overbrand"]
+    logging: *logging
+
+networks:
+  obs:
+  dokploy-network:
+    external: true
+
+volumes:
+  grafana_data:
+  prometheus_data:
+  loki_data:
+  alertmanager_data:

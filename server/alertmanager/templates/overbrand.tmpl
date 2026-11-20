@@ -1,0 +1,21 @@
+{{ define "overbrand.title" -}}
+{{ if eq .Status "firing" }}🔴{{ else }}✅{{ end }} [{{ .CommonLabels.project | toUpper }}{{ with .CommonLabels.env }} {{ . }}{{ end }}] {{ .CommonLabels.alertname }}{{ with .CommonLabels.service }} · {{ . }}{{ end }}
+{{- end }}
+
+{{ define "overbrand.subject" }}{{ template "overbrand.title" . }}{{ end }}
+
+{{ define "overbrand.telegram" -}}
+<b>{{ template "overbrand.title" . }}</b>
+{{ range .Alerts -}}
+{{ if .Annotations.summary }}• {{ .Annotations.summary }}{{ end }}
+{{ if .Annotations.description }}  {{ .Annotations.description }}{{ end }}
+{{ end -}}
+{{ with (index .Alerts 0).Annotations.dashboard }}<a href="{{ . }}">Dashboard</a>{{ end }}
+{{- end }}
+
+{{ define "overbrand.email" -}}
+<h3>{{ template "overbrand.title" . }}</h3>
+<ul>
+{{ range .Alerts }}<li><b>{{ .Annotations.summary }}</b>{{ if .Annotations.description }}<br>{{ .Annotations.description }}{{ end }}<br><small>{{ range .Labels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}</small></li>
+{{ end }}</ul>
+{{- end }}

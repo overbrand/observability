@@ -1,0 +1,3 @@
+# Shared Overbrand services.
+- targets: ["https://s3.overbrand.net/minio/health/live"]
+  labels: { project: overbrand, env: production, service: s3, module: http_2xx }

@@ -1,0 +1,53 @@
+# Overbrand agent for a Docker host. One per machine.
+#
+#   Dokploy: a "Docker Compose" app, repository overbrand/observability,
+#            compose path agents/alloy-docker/docker-compose.yml.
+#   Plain Docker: cp .env.example .env && docker compose up -d
+#
+# It reads the Docker socket and the host's /proc, /sys and / (read-only),
+# and pushes to the central stack with this machine's ingest credential.
+
+name: overbrand-agent
+
+services:
+  alloy:
+    image: grafana/alloy:v1.21.3
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:12345
+      - --storage.path=/var/lib/alloy/data
+      - --disable-reporting
+      - /etc/alloy/config.alloy
+    environment:
+      PROJECT: ${PROJECT:?Set PROJECT (bns, eventez, …)}
+      ENV: ${ENV:?Set ENV (production, staging, …)}
+      HOST_NAME: ${HOST_NAME:?Set HOST_NAME (a name for this machine)}
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-https://ingest.overbrand.net/api/v1/write}
+      LOKI_URL: ${LOKI_URL:-https://ingest.overbrand.net/loki/api/v1/push}
+      INGEST_USER: ${INGEST_USER:?Set INGEST_USER}
+      INGEST_PASSWORD: ${INGEST_PASSWORD:?Set INGEST_PASSWORD}
+    # cAdvisor reads cgroups and container state. `cgroup: host`: on cgroup v2
+    # Docker otherwise gives the agent a private cgroup tree in which no other
+    # container exists.
+    privileged: true
+    pid: host
+    cgroup: host
+    volumes:
+      - ./config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+      - alloy_data:/var/lib/alloy/data
+    labels:
+      # The agent's own logs are not shipped.
+      overbrand.logs: "false"
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  alloy_data:

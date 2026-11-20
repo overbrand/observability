@@ -1,0 +1,18 @@
+groups:
+  - name: meta
+    rules:
+      # Always firing. Alertmanager sends it every minute to HEARTBEAT_URL (a
+      # dead man's switch such as healthchecks.io), which alerts when it stops:
+      # that is how you learn the monitoring itself is down.
+      - alert: Watchdog
+        expr: vector(1)
+        labels: { severity: none, project: overbrand }
+        annotations:
+          summary: "The alerting pipeline is alive"
+
+      - alert: ObservabilityComponentDown
+        expr: up{job="observability"} == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Observability {{ $labels.service }} is down"

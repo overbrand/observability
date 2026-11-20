@@ -1,0 +1,249 @@
+// Overbrand agent for a Docker host (a VPS, a Dokploy server).
+//
+// Sends to the central stack:
+//   - every container's stdout/stderr → Loki
+//   - host metrics (node exporter) and container metrics (cAdvisor) → Prometheus
+//   - /metrics of containers that ask for it (label overbrand.metrics.port)
+// Every series and stream carries project, env and host; container ones also
+// service (the compose service) and container.
+//
+// project/env come from PROJECT/ENV, unless a container says otherwise with
+// the labels overbrand.project / overbrand.env / overbrand.service — for a
+// server that runs several projects.
+
+// ── Containers ────────────────────────────────────────────────────────────
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "30s"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/?(.*)"
+    target_label  = "container"
+  }
+  // service: overbrand.service, else the compose service, else the container name.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/?(.*)"
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "(.+)"
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_overbrand_service"]
+    regex         = "(.+)"
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_overbrand_project"]
+    regex         = "(.+)"
+    target_label  = "project"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_overbrand_env"]
+    regex         = "(.+)"
+    target_label  = "env"
+  }
+  rule {
+    source_labels = ["project"]
+    regex         = ""
+    replacement   = sys.env("PROJECT")
+    target_label  = "project"
+  }
+  rule {
+    source_labels = ["env"]
+    regex         = ""
+    replacement   = sys.env("ENV")
+    target_label  = "env"
+  }
+  rule {
+    replacement  = sys.env("HOST_NAME")
+    target_label = "host"
+  }
+  // A container labelled overbrand.logs=false is not collected.
+  rule {
+    source_labels = ["__meta_docker_container_label_overbrand_logs"]
+    regex         = "false"
+    action        = "drop"
+  }
+}
+
+loki.source.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  targets          = discovery.relabel.containers.output
+  forward_to       = [loki.write.central.receiver]
+  refresh_interval = "30s"
+}
+
+loki.write "central" {
+  endpoint {
+    url = sys.env("LOKI_URL")
+    basic_auth {
+      username = sys.env("INGEST_USER")
+      password = sys.env("INGEST_PASSWORD")
+    }
+  }
+}
+
+// ── Host metrics ──────────────────────────────────────────────────────────
+prometheus.exporter.unix "host" {
+  procfs_path = "/host/proc"
+  sysfs_path  = "/host/sys"
+  rootfs_path = "/host/root"
+
+  filesystem {
+    mount_points_exclude = "^/(dev|proc|run|sys|host|var/lib/docker/.+|var/lib/kubelet/.+)($|/)"
+  }
+}
+
+prometheus.scrape "host" {
+  targets         = prometheus.exporter.unix.host.targets
+  job_name        = "integrations/unix"
+  scrape_interval = "30s"
+  forward_to      = [prometheus.relabel.common.receiver]
+}
+
+// ── Container metrics ─────────────────────────────────────────────────────
+prometheus.exporter.cadvisor "containers" {
+  docker_host      = "unix:///var/run/docker.sock"
+  docker_only      = true
+  storage_duration = "2m"
+  // Keep the series small: no per-CPU, per-disk or process metrics.
+  disabled_metrics = ["percpu", "process", "sched", "hugetlb", "referenced_memory", "cpu_topology", "resctrl", "cpuset", "advtcp", "udp", "tcp", "disk", "diskIO"]
+}
+
+prometheus.scrape "containers" {
+  targets         = prometheus.exporter.cadvisor.containers.targets
+  job_name        = "integrations/cadvisor"
+  scrape_interval = "30s"
+  forward_to      = [prometheus.relabel.containers.receiver]
+}
+
+prometheus.relabel "containers" {
+  // Only real containers: cAdvisor also reports the root cgroup (container_*
+  // series without a name). The scrape's own `up` is kept.
+  rule {
+    source_labels = ["__name__", "name"]
+    regex         = "container_.*;"
+    action        = "drop"
+  }
+  rule {
+    source_labels = ["name"]
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["name"]
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["container_label_com_docker_compose_service"]
+    regex         = "(.+)"
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["container_label_overbrand_service"]
+    regex         = "(.+)"
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["container_label_overbrand_project"]
+    regex         = "(.+)"
+    target_label  = "project"
+  }
+  rule {
+    source_labels = ["container_label_overbrand_env"]
+    regex         = "(.+)"
+    target_label  = "env"
+  }
+  // Every container label is copied by cAdvisor: drop them all now.
+  rule {
+    regex  = "container_label_.+|id|name|image"
+    action = "labeldrop"
+  }
+  forward_to = [prometheus.relabel.common.receiver]
+}
+
+// ── Application /metrics (opt-in) ─────────────────────────────────────────
+// A container labelled overbrand.metrics.port=9100 (and optionally
+// overbrand.metrics.path=/metrics) is scraped on its own network address.
+discovery.relabel "app_metrics" {
+  targets = discovery.relabel.containers.output
+
+  rule {
+    source_labels = ["__meta_docker_container_label_overbrand_metrics_port"]
+    regex         = ".+"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__meta_docker_network_ip", "__meta_docker_container_label_overbrand_metrics_port"]
+    separator     = ":"
+    target_label  = "__address__"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_overbrand_metrics_path"]
+    regex         = "(.+)"
+    target_label  = "__metrics_path__"
+  }
+}
+
+prometheus.scrape "app_metrics" {
+  targets         = discovery.relabel.app_metrics.output
+  job_name        = "app"
+  scrape_interval = "30s"
+  forward_to      = [prometheus.relabel.common.receiver]
+}
+
+// ── The agent itself ──────────────────────────────────────────────────────
+prometheus.exporter.self "alloy" { }
+
+prometheus.scrape "alloy" {
+  targets    = prometheus.exporter.self.alloy.targets
+  job_name   = "integrations/alloy"
+  forward_to = [prometheus.relabel.common.receiver]
+}
+
+// ── Common labels, then out ───────────────────────────────────────────────
+prometheus.relabel "common" {
+  rule {
+    source_labels = ["project"]
+    regex         = ""
+    replacement   = sys.env("PROJECT")
+    target_label  = "project"
+  }
+  rule {
+    source_labels = ["env"]
+    regex         = ""
+    replacement   = sys.env("ENV")
+    target_label  = "env"
+  }
+  rule {
+    replacement  = sys.env("HOST_NAME")
+    target_label = "host"
+  }
+  // The built-in exporters' instance is the agent's container id, which
+  // changes on every restart: name them after the machine instead.
+  rule {
+    source_labels = ["job"]
+    regex         = "integrations/.*"
+    replacement   = sys.env("HOST_NAME")
+    target_label  = "instance"
+  }
+  forward_to = [prometheus.remote_write.central.receiver]
+}
+
+prometheus.remote_write "central" {
+  endpoint {
+    url = sys.env("PROMETHEUS_URL")
+    basic_auth {
+      username = sys.env("INGEST_USER")
+      password = sys.env("INGEST_PASSWORD")
+    }
+  }
+}

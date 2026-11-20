@@ -1,0 +1,12 @@
+# BuyNSellem. Probed every minute from the observability server.
+# module: http_health (a health endpoint saying ok/degraded/healthy) or http_2xx.
+- targets: ["https://buynsellem.com/"]
+  labels: { project: bns, env: production, service: web, module: http_2xx }
+- targets: ["https://api.buynsellem.com/api/health"]
+  labels: { project: bns, env: production, service: api, module: http_health }
+- targets: ["https://api.buynsellem.com/admin"]
+  labels: { project: bns, env: production, service: admin, module: http_2xx }
+# The chat service has no public route yet (chat.buynsellem.com answers 404):
+# add it once it does, e.g. its socket.io handshake.
+# - targets: ["https://chat.buynsellem.com/socket.io/?EIO=4&transport=polling"]
+#   labels: { project: bns, env: production, service: chat, module: http_2xx }

@@ -1,0 +1,18 @@
+# Loki ruler (log-based alerts). Every stream carries project, env, service.
+groups:
+  - name: logs
+    rules:
+      # JSON logs: pino ("level":50/60), Python ("levelname":"ERROR"), others
+      # ("level":"error"). Plain-text lines are matched on " ERROR " too.
+      - alert: ErrorLogSpike
+        expr: |
+          sum by (project, env, service) (
+            count_over_time({project=~".+"}
+              |~ `(?i)("(level|levelname|severity)"\s*:\s*"?(error|fatal|critical|50|60)\b)|(\s(ERROR|CRITICAL|FATAL)\s)`
+            [5m])
+          ) > 20
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.project }}/{{ $labels.service }} logged {{ $value }} errors in 5 minutes"
+          description: "Open Grafana → Overbrand → Logs, filtered on this service."
