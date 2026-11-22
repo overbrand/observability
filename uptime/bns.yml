@@ -10,3 +10,15 @@
 # add it once it does, e.g. its socket.io handshake.
 # - targets: ["https://chat.buynsellem.com/socket.io/?EIO=4&transport=polling"]
 #   labels: { project: bns, env: production, service: chat, module: http_2xx }
+
+# Dev (the azure-dev stack).
+- targets: ["https://dev.buynsellem.com/"]
+  labels: { project: bns, env: dev, service: web, module: http_2xx }
+- targets: ["https://www.dev.buynsellem.com/"]
+  labels: { project: bns, env: dev, service: web-www, module: http_2xx }
+- targets: ["https://api.dev.buynsellem.com/api/health"]
+  labels: { project: bns, env: dev, service: api, module: http_health }
+- targets: ["https://api.dev.buynsellem.com/admin"]
+  labels: { project: bns, env: dev, service: admin, module: http_2xx }
+- targets: ["https://chat.dev.buynsellem.com/socket.io/?EIO=4&transport=polling"]
+  labels: { project: bns, env: dev, service: chat, module: http_2xx }
